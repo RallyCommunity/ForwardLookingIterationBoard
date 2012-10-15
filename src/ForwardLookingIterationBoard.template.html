@@ -1,0 +1,42 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<!-- Copyright (c) 2011  Rally Software Development Corp.  All rights reserved -->
+<html>
+<head>
+    <title>Forward-Looking Iteration Board</title>
+    <meta name="Name" content="App: Forward-Looking Iteration Board"/>
+    <meta name="Version" content="Hackathon"/>
+    <meta name="Vendor" content="Rally"/>
+    <meta http-equiv="X-UA-Compatible" content="IE=8" />
+    <script type="text/javascript" src="/apps/1.24/sdk.js"></script>
+    <script type="text/javascript" src="IterationPlacer.js"></script>
+    <script type="text/javascript" src="VelocityEstimator.js"></script>
+    <script type="text/javascript" src="ForwardLookingIterationBoardCardRenderer.js"></script>
+    <script type="text/javascript" src="ForwardLookingIterationBoardColumnRenderer.js"></script>
+    <script type="text/javascript" src="ForwardLookingIterationBoard.js"></script>
+    <link rel="stylesheet" href="ForwardLookingIterationBoard.css" type="text/css">
+    <script type="text/javascript">
+        function onLoad() {
+
+            var board, rallyDataSource;
+
+            rallyDataSource = new rally.sdk.data.RallyDataSource(
+              '__WORKSPACE_OID__',
+              '__PROJECT_OID__',
+              '__PROJECT_SCOPING_UP__',
+              '__PROJECT_SCOPING_DOWN__'
+            );
+
+            //rallyDataSource.setServer('test7cluster.rallydev.com');
+            //rallyDataSource.setServer('rally1.rallydev.com');
+            rallyDataSource.setServer('preview.rallydev.com');
+
+            board = new ForwardLookingIterationBoard(rallyDataSource, '__PROJECT_OIDS_IN_SCOPE__');
+            board.display(dojo.body());
+        }
+
+        rally.addOnLoad(onLoad);
+    </script>
+</head>
+<body>
+</body>
+</html>

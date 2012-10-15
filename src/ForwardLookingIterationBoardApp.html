@@ -1,0 +1,1121 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<!-- Copyright (c) 2011  Rally Software Development Corp.  All rights reserved -->
+<html>
+<head>
+    <title>Forward-Looking Iteration Board</title>
+    <meta name="Name" content="App: Forward-Looking Iteration Board"/>
+    <meta name="Version" content="Hackathon"/>
+    <meta name="Vendor" content="Rally"/>
+    <meta http-equiv="X-UA-Compatible" content="IE=8" />
+    <script type="text/javascript" src="/apps/1.24/sdk.js"></script>
+
+    <script type="text/javascript">
+    var flsp = flsp || {};
+        
+        flsp.IterationPlacer = function flsp_IterationPlacer(iterations, fallback) {
+            // private methods
+            function _init(iterations) {
+                if(typeof iterations === 'undefined' || iterations === null) {
+                    throw new Error("IterationPlacer: given no iterations");
+                }
+        
+                if(!dojo.isArray(iterations)) {
+                    throw new Error("IterationPlacer: iterations must be an array");
+                }
+            }
+        
+            function _sortIterations(iterations) {
+                iterations.sort(function(a, b) {
+                    var dateA = new Date(a.StartDate);
+                    var dateB = new Date(b.StartDate);
+        
+                    if(dateA > dateB) {
+                        return 1;
+                    } else if(dateA < dateB) {
+                        return -1;
+                    } else {
+                        return 0;
+                    }
+                });
+            }
+        
+            function _sortItems(items) {
+                items.sort(function(a, b) {
+                    var aRank = (a.Rank || 0), bRank = (b.Rank || 0);
+                    return bRank - aRank;
+                });
+            }
+        
+            function _isAssignable(item) {
+                return (item.PlanEstimate && item.PlanEstimate > 0);
+            }
+        
+            function _placeItem(iterations, item) {
+                // this method assumes iterations have been sorted by date
+                // which they are when this object is first created
+              
+                var iteration, i;
+        
+                for(i = 0; i < iterations.length; i += 1 ) {
+                    iteration = iterations[i];
+                    if(iteration.AvailableCapacity >= item.PlanEstimate) {
+                        iteration.AvailableCapacity -= item.PlanEstimate;
+                       item.ProposedIteration = iteration.Name;
+                       break;
+                    }
+                }
+            }
+        
+            function _setAssignedItems(iterations, assignedItems) {
+                var i, ai;
+                dojo.forEach(iterations, function(iteration) {
+                    for(i = 0; i < assignedItems.length; i += 1) {
+                        ai = assignedItems[i];
+        
+                        if(ai.Iteration.ObjectID === iteration.ObjectID) {
+                            ai.IsPreAssigned = true;
+                            iteration.AvailableCapacity -= (ai.PlanEstimate || 0);
+                            ai.ProposedIteration = iteration.Name;
+                        }
+                    }
+                });
+            }
+        
+            _init(iterations);
+            _sortIterations(iterations);
+        
+            this.placeItems = function IterationPlacer_placeItems(backlogItems, assignedItems) {
+                var item, i;
+        
+                if(assignedItems) {
+                    _setAssignedItems(iterations, assignedItems);
+                }
+        
+                if(!backlogItems) {
+                    throw new Error("IterationPlacer.placeItems: not given any backlog items");
+                }
+        
+                if(!dojo.isArray(backlogItems)) {
+                    throw new Error("IterationPlacer.placeItems: backlog items must be an array");
+                }
+        
+                _sortItems(backlogItems);
+        
+                for(i = 0; i < backlogItems.length; i += 1) {
+                    item = backlogItems[i];
+        
+                    // default response, no proposed iteration
+                    item.ProposedIteration = fallback;
+        
+                    if(_isAssignable(item)) {
+                      _placeItem(iterations, item);
+                    }
+                }
+            };
+        };
+        
+    
+    var flsp = flsp || {};
+        
+        flsp.VelocityEstimator = function VelocityEstimator(userConfig, rallyDataSource, projectOidsInScopeHangman) {
+            rally.sdk.ComponentBase.call(this);
+        
+            var that = this;
+        
+            // private members, UI related
+            var _targetElement;
+            var _displayContainer;
+            var _velocityTitleLabel;
+            var _velocityLabel;
+            var _editButton;
+            var _editContainer;
+            var _velocityDropdownContainer;
+            var _velocityTypeDropdown;
+            var _customTextContainer;
+            var _customTextBox;
+            var _finishEditButton;
+            
+            // private members, calculation related
+            var _projectsInScopeCount = null;
+            var _rallyDataSource;
+            var _finalScheduleStateValue;
+            var _iterationCount = 10;
+            var _sampleSize = 3;
+            var _velocities;
+            var _best = 'best';
+            var _worst = 'worst';
+            var _recent = 'recent';
+            var _custom = 'custom';
+            var _currentVelocityType = _recent;
+        
+            var _velocityDisplayMap = {
+                best : 'Best',
+                worst : 'Worst',
+                recent : 'Most Recent',
+                custom: 'Custom'
+            };
+            
+            // private methods
+        
+            function _showDisplayContainer() {
+                dojo.style(_editContainer, "display", "none");
+                dojo.style(_displayContainer, "display", "");
+            }
+        
+            function _showEditContainer() {
+                dojo.style(_displayContainer, "display", "none");
+                dojo.style(_editContainer, "display", "");
+        
+                // hack for IE7, it insists on showing the custom textbox, so force it to hide it right before
+                // displaying the editor
+                if(_currentVelocityType !== _custom) {
+                    dojo.style(_customTextContainer, "display", "none");
+                }
+            }
+        
+            function _getCurrentVelocity() {
+                if(_currentVelocityType === _custom) {
+                    return parseFloat(_customTextBox.getValue());
+                } else {
+                    return _velocities && _velocities[_currentVelocityType];
+                }
+            }
+        
+            function _setVelocityLabel() {
+                var currentVelocity = _getCurrentVelocity();
+        
+                if(typeof currentVelocity === 'number' && !isNaN(currentVelocity)) {
+                    _velocityLabel.innerHTML = currentVelocity;
+                } else {
+                    _velocityLabel.innerHTML = '--';
+                }
+        
+                _velocityTitleLabel.innerHTML = _velocityDisplayMap[_currentVelocityType] + " Velocity: ";
+            }
+        
+            function _fireVelocityChanged() {
+                that.fireEvent(that.getValidEvents().onVelocityChanged, { velocity: _getCurrentVelocity(), allVelocities: _velocities });
+            }
+        
+            function _determineProjectsInScopeCount(hangman) {
+                // hangman wasn't provided or wasn't resolved
+                if(!hangman || hangman === '__PROJECT_OIDS_IN_SCOPE__') {
+                    return null;
+                }
+        
+                return hangman.split(',').length;
+            }
+        
+            function _init(userConfig, rallyDataSource, projectOidsInScopeHangman) {
+                if(!rallyDataSource) {
+                    throw new Error("Missing required argument: rallyDataSource");
+                } else {
+                    _rallyDataSource = rallyDataSource;
+                    _iterationCount = (userConfig && userConfig.iterationCount) || 10;
+                    _sampleSize = (userConfig && userConfig.sampleSize) || 3;
+                    _projectsInScopeCount = _determineProjectsInScopeCount(projectOidsInScopeHangman);
+                }
+            }
+        
+            function _groupIterations(rawIterations) {
+                // group the iterations by name, start date and end date, and accumulate CumulativeFlowData
+                var groupHash = {}, key, groups = [], group;
+        
+                dojo.forEach(rawIterations, function(rawIteration) {
+                    key = rawIteration.Name + rawIteration.StartDate + rawIteration.EndDate;
+                    group = groupHash[key];
+        
+                    if(!group) {
+                        groupHash[key] = rawIteration;
+                    } else {
+                        group.VelocityTotal += (rawIteration.VelocityTotal || 0);
+                    }
+                });
+        
+                for(group in groupHash) {
+                    if(groupHash.hasOwnProperty(group)) {
+                        groups.push(groupHash[group]);
+                    }
+                }
+                return groups;
+            }
+        
+            function _showWarning(message) {
+                rally.sdk.ui.AppHeader.showMessage("warning", message, 5000);
+                rally.Logger.warn(message);
+            }
+        
+            function _onEditClicked(sender, e) {
+                _showEditContainer();
+            }
+        
+            function _onFinishEditClicked() {
+                var newVelocityType = _velocityTypeDropdown.getValue();
+        
+                _showDisplayContainer();
+            
+                if(_currentVelocityType !== newVelocityType || newVelocityType === _custom) { 
+                    _currentVelocityType = newVelocityType;
+                    _setVelocityLabel();
+                    _fireVelocityChanged();
+                }
+            }
+        
+            function _onVelocityTypeDropdownValueChanged(sender, e) {
+                // show or hide the custom textbox based on whether the user chose custom
+                var displayValue = e.value === _custom ? "" : "none";
+                dojo.style(_customTextContainer, "display", displayValue);
+            }
+        
+            function _setVelocityDropdownItems() {
+                var ss = _sampleSize.toString(), ic = _iterationCount.toString();
+                var dropDownItems = [
+                        { label: ss + ' Most Recent', value: _recent },
+                        { label: 'Best ' + ss + ' average from past ' + ic, value: _best },
+                        { label: 'Worst ' + ss + ' average from past ' + ic, value: _worst },
+                        { label: 'Custom', value: _custom }
+                    ];
+        
+                _velocityTypeDropdown.setItems(dropDownItems);
+                _velocityTypeDropdown.display(_velocityDropdownContainer);
+            }
+        
+        
+            function _getFinalScheduleStateValue(callback) {
+                var query = {
+                    key: 'scheduleStates',
+                    type: 'Hierarchical Requirement',
+                    attribute: 'Schedule State'
+                };
+        
+                _rallyDataSource.find(query, function(result) {
+                    var finalScheduleState = (result.scheduleStates && result.scheduleStates[result.scheduleStates.length - 1]) || "Accepted";
+                    callback(finalScheduleState);
+                });
+            }
+        
+            function _getCumulativeFlowData(iteration, callback) {
+                var queryString;
+        
+                if(_finalScheduleStateValue === 'Accepted') {
+                    queryString = "(( IterationObjectID = " + iteration.ObjectID + " ) AND (CardState = Accepted))";
+                } else {
+                    queryString = "(( IterationObjectID = " + iteration.ObjectID + " ) AND ((CardState = Accepted) OR (CardState = \"" + _finalScheduleStateValue + "\")))";
+                }
+        
+                var query = {
+                    key: 'cfd',
+                    type: 'IterationCumulativeFlowData',
+                    query: '((IterationObjectID = ' + iteration.ObjectID + ') and (CardState = Accepted))',
+                    fetch: 'CardEstimateTotal',
+                    pagesize: 1,
+                    order: 'CreationDate desc'
+                };
+        
+                _rallyDataSource.find(query, function(results) {
+                    iteration.VelocityTotal = (results.cfd && results.cfd[0] && results.cfd[0].CardEstimateTotal) || 0;
+                    callback(iteration);
+                });
+            }
+        
+            function _sortByBest(a, b) {
+                var bVelocityTotal = b.VelocityTotal || 0;
+                var aVelocityTotal = a.VelocityTotal || 0;
+                return bVelocityTotal - aVelocityTotal;
+            }
+        
+            function _sortByWorst(a, b) {
+                var bVelocityTotal = b.VelocityTotal || 0;
+                var aVelocityTotal = a.VelocityTotal || 0;
+                return aVelocityTotal - bVelocityTotal;
+            }
+        
+            function _sortByRecent(a, b) {
+                var dateA = new Date(a.EndDate);
+                var dateB = new Date(b.EndDate);
+            
+                if(dateA < dateB) {
+                    return 1;
+                } else if(dateA > dateB) {
+                    return -1;
+                } else {
+                    return 0;
+                }
+            }
+        
+            function _determineVelocityWith(iterations, sortFunc) {
+                if(!iterations || !iterations.length) {
+                    return 0;
+                }
+            
+                iterations.sort(sortFunc);
+            
+                var sample = iterations.slice(0, _sampleSize);
+                var sum = 0;
+                dojo.forEach(sample, function(e) { sum += e.VelocityTotal || 0; });
+            
+                var velocity = sum / sample.length;
+        
+                return (Math.round(velocity * 100)) / 100;
+            }
+        
+            function _determineVelocities(completeIterations, callback) {
+                if(completeIterations.length === 0) {
+                    _showWarning("No previous iterations found, a velocity estimate could not be calculated");
+                }
+        
+                var velocities = {};
+        
+                velocities[_best] = _determineVelocityWith(completeIterations, _sortByBest);
+                velocities[_worst] = _determineVelocityWith(completeIterations, _sortByWorst);
+                velocities[_recent] = _determineVelocityWith(completeIterations, _sortByRecent);
+        
+                callback(velocities);
+            }
+        
+            function _getVelocities(callback) {
+                var now = rally.sdk.util.DateTime.toIsoString(new Date()), completeIterations = [];
+        
+                _getFinalScheduleStateValue(function(finalValue) {
+                    var query;
+                    _finalScheduleStateValue = finalValue;
+        
+                    // retrieve enough iterations based on how many projects are in scope
+                    // or default to 200 if we dont currently know the scope (ie running outside of rally)
+                    var pageSize = (_projectsInScopeCount * _iterationCount) || 200;
+                    // clamp pagesize to 200
+                    pageSize = Math.min(200, pageSize);
+        
+                    query = [
+                        {
+                            key: 'iterations',
+                            type: 'Iteration',
+                            query: '(EndDate < ' + now + ')',
+                            fetch: 'ObjectID,EndDate,StartDate,Name',
+                            pagesize: pageSize,
+                            order: 'EndDate desc'
+                        }
+                    ];
+        
+                    _rallyDataSource.find(query, function(results) {
+                        var i;
+                        if(results.iterations.length === 0) {
+                            _determineVelocities(completeIterations, callback);
+                        }
+        
+                        for(i = 0; i < results.iterations.length; i += 1) {
+                            _getCumulativeFlowData(results.iterations[i], function(iteration) {
+                                completeIterations.push(iteration);
+                                if(completeIterations.length === results.iterations.length) {
+                                    var grouped = _groupIterations(completeIterations);
+                                    _determineVelocities(grouped, callback);
+                                }
+                            });
+                        }
+                    });
+                });
+            }
+        
+            function _beginCalculateVelocity() {    
+                _showDisplayContainer();
+                _editButton.setEnabled(false);
+                that.fireEvent(that.getValidEvents().onBeginVelocityCalculating, {});
+                
+                dojo.empty(_velocityLabel);
+                var wait = new rally.sdk.ui.basic.Wait({ text: '' });
+                wait.display(_velocityLabel);
+                
+                _getVelocities(dojo.hitch(this, function(velocities) {
+                    wait.hide();
+        
+                    _velocities = velocities;
+            
+                    _setVelocityLabel();
+                    _setVelocityDropdownItems();
+        
+                    _fireVelocityChanged();
+                    _editButton.setEnabled(true);
+                }));
+            }
+            
+            // getters
+        
+            this.getProjectsInScopeCount = function ve_getProjectsInScopeCount() {
+                return _projectsInScopeCount;
+            };
+        
+            this.getIterationCount = function ve_getIterationCount() {
+                return _iterationCount;
+            };
+        
+            this.getSampleSize = function ve_getSampleSize() {
+                return _sampleSize;
+            };
+        
+            // public methods
+        
+            this.display = function ve_display(element) {
+                _targetElement = dojo.byId(element);
+        
+                if(!_targetElement) {
+                    throw new Error("Velocity Estimator requires a display element.");
+                }
+        
+                dojo.addClass(_targetElement, "velocityEstimator");
+        
+                var container = dojo.create("div", { id: _targetElement.id + 'VelocityEstimator' }, _targetElement);
+        
+                // display container
+                _displayContainer = dojo.create("span", null, container);
+                _velocityTitleLabel = dojo.create("span", { innerHTML: "Velocity: " }, _displayContainer);
+        
+                _velocityLabel = dojo.create("span", {
+                        id: _targetElement.id + 'VelocityLabel',
+                        style: 'font-weight: bold; font-size: 1.5em; min-width: 18px; min-height: 18px; display: inline-block'
+                    }, _displayContainer);
+        
+                var editButtonContainer = dojo.create("span", null, _displayContainer);
+        
+                var editButtonConfig = {
+                    text: "Edit",
+                    value: "Edit"
+                };
+        
+                _editButton = new rally.sdk.ui.basic.Button(editButtonConfig);
+                _editButton.addEventListener(_editButton.getValidEvents().onClick, _onEditClicked);
+                _editButton.display(editButtonContainer);
+        
+        
+                // config container
+                _editContainer = dojo.create("span", null, container);
+                dojo.style(_editContainer, "display", "none");
+        
+        
+                var velocityDropdownConfig = {
+                    label: "Velocity Type",
+                    showLabel: true,
+                    rememberSelection: false
+                };
+                _velocityTypeDropdown = new rally.sdk.ui.basic.Dropdown(velocityDropdownConfig);
+        
+                _velocityDropdownContainer = dojo.create("span", null, _editContainer);
+                _velocityTypeDropdown.addEventListener('onChange', _onVelocityTypeDropdownValueChanged);
+        
+                // config, custom textbox
+                _customTextContainer = dojo.create("span", { id: _targetElement.id + 'customTextContainer' } , _editContainer);
+                _customTextBox = new rally.sdk.ui.basic.TextBox( { label: "Custom Velocity:", showLabel: true });
+                _customTextBox.display(_customTextContainer);
+                dojo.style(_customTextContainer, "display", "none");
+        
+                // config, OK button
+                _finishEditButton = new rally.sdk.ui.basic.Button({ text: "OK" });
+                _finishEditButton.addEventListener(_finishEditButton.getValidEvents().onClick, _onFinishEditClicked);
+                var finishEditButtonContainer = dojo.create("span", null, _editContainer);
+                _finishEditButton.display(finishEditButtonContainer);
+        
+                _beginCalculateVelocity();
+            };
+        
+            this.getValidEvents = function ve_getValidEvents() {
+                return {
+                    onBeginVelocityCalculating: "onBeginVelocityCalculating",
+                    onVelocityChanged: "onVelocityChanged"
+                };
+            };
+        
+            this.destroy = function ve_destroy() {
+                if(_editButton) {
+                    _editButton.destroy();
+                    _editButton = null;
+                }
+        
+                if(_finishEditButton) {
+                    _finishEditButton.destroy();
+                    _finishEditButton = null;
+                }
+        
+                if(_velocityTypeDropdown) {
+                    _velocityTypeDropdown.destroy();
+                    _velocityTypeDropdown = null;
+                }
+        
+                if(_velocityDropdownContainer) {
+                    dojo.destroy(_velocityDropdownContainer);
+                    _velocityDropdownContainer = null;
+                }
+        
+                if(_customTextBox) {
+                    _customTextBox.destroy();
+                    _customTextBox = null;
+                }
+        
+                if(_customTextContainer) {
+                    dojo.destroy(_customTextContainer);
+                    _customTextContainer = null;
+                }
+        
+                if(_velocityLabel) {
+                    dojo.destroy(_velocityLabel);
+                    _velocityLabel = null;
+                }
+        
+                if(_velocityTitleLabel) {
+                    dojo.destroy(_velocityTitleLabel);
+                    _velocityTitleLabel = null;
+                }
+        
+                if(_editContainer) {
+                    dojo.destroy(_editContainer);
+                    _editContainer = null;
+                }
+        
+                if(_displayContainer) {
+                    dojo.destroy(_displayContainer);
+                    _displayContainer = null;
+                }
+        
+                if(_targetElement) {
+                    dojo.destroy(_targetElement);
+                    _targetElement = null;
+                }
+            };
+        
+            _init(userConfig, rallyDataSource, projectOidsInScopeHangman);
+        };
+        
+    
+    /**
+         Copyright (c) 2011  Rally Software Development Corp.  All rights reserved
+         */
+        var ForwardLookingIterationBoardCardRenderer = function(column, item) {
+        
+            rally.sdk.ui.cardboard.BasicCardRenderer.call(this, column, item);
+        
+            var that = this;
+        
+            this.renderCard = function() {
+                var card = document.createElement("div");
+                dojo.addClass(card, "card");
+                dojo.addClass(card, rally.sdk.util.Ref.getTypeFromRef(item._ref));
+                var header = document.createElement("div");
+                dojo.addClass(header, "cardHeader");
+                dojo.addClass(header, "dojoDndHandle");
+                card.appendChild(header);
+        
+                var idDiv = document.createElement("div");
+                var link = new rally.sdk.ui.basic.Link({item: item});
+                link.display(idDiv);
+                dojo.addClass(idDiv, "leftCardHeader");
+                header.appendChild(idDiv);
+        
+                var planEstimateNode = dojo.create("span", null, idDiv);
+                planEstimateNode.innerHTML = " (est: " + (item.PlanEstimate || '?') + ")";
+                
+                if(!item.PlanEstimate) {
+                    dojo.addClass(planEstimateNode, "noPlanEstimate");
+                } else {
+                    dojo.addClass(planEstimateNode, "hasPlanEstimate");
+                }
+        
+                if(item.IsPreAssigned) {
+                    dojo.addClass(card, "isPreAssigned");
+                }
+        
+                var ownerImg = document.createElement("img");
+                dojo.addClass(ownerImg, "cardOwner");
+                var ownerName = document.createElement("div");
+                dojo.addClass(ownerName, "cardOwnerName");
+        
+                if (item.Owner !== null) {
+                    ownerImg.setAttribute("src", rally.sdk.util.Ref.getUserImage(item.Owner._ref));
+                    ownerName.appendChild(document.createTextNode(item.Owner._refObjectName));
+                }
+                else {
+                    ownerImg.setAttribute("src", rally.sdk.loader.launcherPath + "/../images/profile-mark-18.png");
+                    ownerName.appendChild(document.createTextNode("No Owner"));
+                }
+        
+                header.appendChild(ownerImg);
+                header.appendChild(ownerName);
+        
+                var textDiv = document.createElement("div");
+                dojo.addClass(textDiv, "cardContent");
+                textDiv.innerHTML = item.Name;
+                card.appendChild(textDiv);
+        
+                return card;
+            };
+        
+            this.renderDndCard = function() {
+                var avatarCard = that.renderCard();
+                dojo.addClass(avatarCard, "avatar");
+                return avatarCard;
+            };
+        };
+    
+    var ForwardLookingIterationBoardColumnRenderer = function(board, value, options) {
+                  rally.sdk.ui.cardboard.BasicColumnRenderer.call(this, board, value, options);
+         
+                    var that = this;
+                    var dndContainer;
+                    var cards = 0;
+                    var columnDiv;
+                    var resourcesDisplay;
+         
+                    this.render = function() {
+                        columnDiv = document.createElement("div");
+                        dojo.addClass(columnDiv, "column");
+         
+                        var columnHeader = document.createElement("div");
+                        dojo.addClass(columnHeader, "columnHeader");
+                        columnHeader.appendChild(document.createTextNode(options.displayValue || value));
+                        if (options && options.startDate && options.endDate) {
+                            resourcesDisplay = document.createElement("div");
+                            dojo.addClass(resourcesDisplay,"capacityDisplay");
+                            setCapacityText();
+                            columnHeader.appendChild(resourcesDisplay);
+                        }
+                        columnDiv.appendChild(columnHeader);
+                        dndContainer = document.createElement("div");
+                        dojo.addClass(dndContainer, "columnContent");
+                        columnDiv.appendChild(dndContainer);
+         
+                        return columnDiv;
+                    };
+        
+                    function _toPrettyDate(rallyDateStr) {
+                        var date = rally.sdk.util.DateTime.fromIsoString(rallyDateStr);
+                        return rally.sdk.util.DateTime.format(date, "M/dd/yy")
+                    }
+         
+                    function setCapacityText() {
+                        if (options && options.startDate && options.endDate) {
+                            dojo.empty(resourcesDisplay);
+                            resourcesDisplay.innerHTML = _toPrettyDate(options.startDate) + " - " + _toPrettyDate(options.endDate);
+                        }
+                    }
+         
+                    this.addNoDropClass = function(items) {
+                        return false;
+                    };
+         
+                    this.cardRemoved = function(card) {
+                        cards--;
+                        setCapacityText();
+                    };
+         
+                    this.cardAdded = function(card) {
+                        cards++;
+                        setCapacityText();
+                    };
+         
+                    this.getDndContainer = function() {
+                        return dndContainer;
+                    };
+         
+                    this.getColumnNode = function() {
+                        return columnDiv;
+                    };
+         
+                    this.clear = function() {
+                        dojo.empty(that.getDndContainer());
+                        cards = 0;
+                        setCapacityText();
+                    };
+        };
+        
+    
+    function ForwardLookingIterationBoard(rallyDataSource, projectOidsInScopeHangman) {
+            var _iterations;
+            var _cardboard;
+            var _checkBoxes = [];
+            var _velocity;
+        
+            function _refreshBoard() {
+                var cardboardConfig = {
+                    types: [],
+                    attribute: "ProposedIteration",
+                    columns: _getColumns,
+                    maxCardsPerColumn: 100,
+                    items: _getItems,
+                    cardRenderer: ForwardLookingIterationBoardCardRenderer,
+                    columnRenderer: ForwardLookingIterationBoardColumnRenderer,
+                    sortAscending: true,
+                    order: "Rank",
+                    readOnly: true
+                };
+        
+                //Build types based on checkbox selections
+                dojo.forEach(_checkBoxes, function(checkBox) {
+                    if (checkBox.getChecked()) {
+                        cardboardConfig.types.push(checkBox.getValue());
+                    }
+                });
+        
+                if (!_cardboard) {
+                    if (cardboardConfig.types.length === 0) {
+                        _checkBoxes[0].setChecked(true);
+                        cardboardConfig.types.push(_checkBoxes[0].getValue());
+                    }
+                    _cardboard = new rally.sdk.ui.CardBoard(cardboardConfig, rallyDataSource);
+                    _cardboard.addEventListener("preUpdate", function(c, args) {
+                        if (parseInt(args.fieldsToUpdate.PlanEstimate) === 0) {
+                            args.fieldsToUpdate.PlanEstimate = null;
+                        }
+                    });
+                    _cardboard.display("cardBoard");
+                } else {
+                    _cardboard.refresh(cardboardConfig);
+                }
+            }
+        
+            function _groupIterations(rawIterations) {
+                var grouped = [];
+                var alreadyGrouped;
+        
+                dojo.forEach(rawIterations, function(rawIteration) {
+                    alreadyGrouped = dojo.some(grouped, function(inList) {
+                        return inList.Name === rawIteration.Name
+                            && inList.StartDate === rawIteration.StartDate
+                            && inList.EndDate === rawIteration.EndDate;
+                    });
+        
+                    if(!alreadyGrouped) {
+                        grouped.push(rawIteration);
+                    }
+                });
+        
+                return grouped;
+            }
+        
+            function _getIterations(callback) {
+                query = [{
+                    key: 'futureIterations',
+                    type: 'iteration',
+                    fetch: 'name,PlanEstimate,StartDate,EndDate,ObjectID',
+                    query: '(StartDate > "' + rally.sdk.util.DateTime.toIsoString(new Date()) + '")',
+                    order: 'StartDate asc'
+                }];
+        
+                rallyDataSource.findAll(query, function(result) {
+                    var grouped = _groupIterations(result.futureIterations);
+                    callback(grouped);
+                }, function(errorResult) {
+                    alert(errorResult.errors.join(':'));
+                });
+            }
+        
+            function _onVelocityChanged(sender, e) {
+              _velocity = e.velocity;
+              _refreshBoard();
+            }
+        
+            function _warnOfNoIterations(element) {
+                var warningMessage = 
+                    "No future iterations are defined. Iterations with a start date in the future are needed for this app to operate.";
+        
+                var warningDiv = document.createElement("div");
+                warningDiv.innerHTML = warningMessage;
+                dojo.addClass(warningDiv, "appMessage warning");
+                element.appendChild(warningDiv);
+        
+                rally.Logger.warn(warningMessage);
+            }
+        
+            function _createLayout(element) {
+                rally.sdk.ui.AppHeader.showPageTools(true);
+                rally.sdk.ui.AppHeader.setHelpTopic("/display/rlyhlpstging/Forward-Looking+Iteration+Board+App");
+        
+                if(_iterations.length === 0) {
+                    _warnOfNoIterations(element);
+                } else {
+                    var headerDiv = document.createElement("div");
+                    element.appendChild(headerDiv);
+        
+                    // checkboxes
+        
+                    var checkBoxContainer = document.createElement("div");
+                    dojo.addClass(checkBoxContainer, "typeFilterContainer");
+                    headerDiv.appendChild(checkBoxContainer);
+        
+        
+                    var showSpan = dojo.create("span", { style: 'display:inline-block' }, checkBoxContainer);
+                    showSpan.appendChild(document.createTextNode("Show:"));
+        
+                    var userStoriesSpan = document.createElement("span");
+                    userStoriesSpan.id = "userStories";
+                    checkBoxContainer.appendChild(userStoriesSpan);
+        
+                    var userStoriesCheckBox = new rally.sdk.ui.basic.Checkbox({
+                        showLabel: true,
+                        label: "User Stories",
+                        labelPosition: "after",
+                        value: "HierarchicalRequirement",
+                        checked: true
+                    });
+        
+                    _checkBoxes.push(userStoriesCheckBox);
+                    userStoriesCheckBox.display(userStoriesSpan);
+        
+                    var defectsSpan = document.createElement("span");
+                    defectsSpan.id = "defects";
+                    checkBoxContainer.appendChild(defectsSpan);
+        
+                    var defectsCheckBox = new rally.sdk.ui.basic.Checkbox({
+                        showLabel: true,
+                        label: "Defects",
+                        labelPosition: "after",
+                        value: "Defect"
+                    });
+                    _checkBoxes.push(defectsCheckBox);
+                    defectsCheckBox.display(defectsSpan);
+        
+                    var defectSuitesSpan = document.createElement("span");
+                    defectSuitesSpan.id = "defectSuites";
+                    checkBoxContainer.appendChild(defectSuitesSpan);
+        
+                    var defectSuitesCheckBox = new rally.sdk.ui.basic.Checkbox({
+                        showLabel: true,
+                        label: "Defect Suites",
+                        labelPosition: "after",
+                        value: "DefectSuite"
+                    });
+                    _checkBoxes.push(defectSuitesCheckBox);
+                    defectSuitesCheckBox.display(defectSuitesSpan);
+        
+                    // velocity estimator settings
+                    
+                    var velocityEstimatorDiv = dojo.create("div", { id: '_velocityEstimatorContainer' }, headerDiv, "last");
+                    var velocityEstimator = new flsp.VelocityEstimator(null, rallyDataSource, projectOidsInScopeHangman);
+                    
+                    velocityEstimator.addEventListener('onVelocityChanged', _onVelocityChanged);
+                    velocityEstimator.display(velocityEstimatorDiv);
+                    
+                    // cardboard
+        
+                    var kanbanBoard = document.createElement("div");
+                    kanbanBoard.id = "cardBoard";
+                    dojo.addClass(kanbanBoard, "cardBoard");
+                    element.appendChild(kanbanBoard);
+        
+                    //Wire up events
+                    dojo.forEach(_checkBoxes, function(checkBox) {
+                        checkBox.addEventListener("onChange", _refreshBoard);
+                    });
+                }
+            }
+        
+            function _getColumns(callback) {
+                var columns = {'Backlog': {displayValue: 'Backlog'}};
+                rally.forEach(_iterations, function(iteration) {
+                    columns[iteration.Name] = { displayValue: iteration.Name, startDate: iteration.StartDate, endDate: iteration.EndDate };
+                });
+                callback(columns);
+            }
+        
+            function _runBatchQueries(queries, callback) {
+                var storedResults = {};
+                var outstandingQueries = queries.length;
+        
+                function gatherResults(results) {
+                    dojo.mixin(storedResults, results);
+                    outstandingQueries -= 1;
+                    if(outstandingQueries === 0) {
+                        callback(storedResults);
+                    }
+                }
+        
+                if(outstandingQueries === 0) {
+                    callback(storedResults);
+                } else {
+                    dojo.forEach(queries, function(query) {
+                        rallyDataSource.find(query, gatherResults);
+                    });
+                }
+            }
+        
+            function _getItems(callback) {
+        
+                //Build types based on checkbox selections
+                var queries = [];
+                dojo.forEach(_checkBoxes, function(checkBox) {
+                    if (checkBox.getChecked()) {
+                        queries.push({key:checkBox.getValue(),
+                            type: checkBox.getValue(),
+                            fetch: "Name,FormattedID,Owner,ObjectID,Rank,PlanEstimate,Iteration,Ready",
+                            query: '(iteration = "null")',
+                            order: 'Rank desc'
+                        });
+                        dojo.forEach(_iterations, function(iteration) {
+                            queries.push({key:checkBox.getValue() + "_assigned_to_" + iteration.ObjectID,
+                                type: checkBox.getValue(),
+                                fetch: "Name,FormattedID,Owner,ObjectID,Rank,PlanEstimate,Iteration,Ready",
+                                query: '((iteration != "null") and (iteration.ObjectId = ' + iteration.ObjectID + '))'
+                            });
+                        });
+                    }
+                });
+        
+                function initIterations(iterations, max) {
+                    rally.forEach(iterations, function(iteration) {
+                        iteration.AvailableCapacity = max;
+                    });
+                }
+        
+                function assignIterations(results) {
+                    initIterations(_iterations, _velocity);
+          
+                    var userStories = results.HierarchicalRequirement || [];
+                    var defects = results.Defect || [];
+                    var defectSuites = results.DefectSuite || [];
+                    var backlogItems = userStories.concat(defects, defectSuites);
+          
+                    var assignedItems = [];
+        
+                    dojo.forEach(_iterations, function(iteration) {
+                        dojo.forEach(_checkBoxes, function(checkBox) {
+                            if(checkBox.getChecked()) {
+                                assignedItems = assignedItems.concat(results[checkBox.getValue() + "_assigned_to_" + iteration.ObjectID] || []);
+                            }
+                        });
+                    });
+          
+                    var placer = new flsp.IterationPlacer(_iterations, "Backlog");
+                    placer.placeItems(backlogItems, assignedItems);
+          
+                    callback(backlogItems.concat(assignedItems));
+                }
+        
+                _runBatchQueries(queries, assignIterations);
+            }
+        
+            this.display = function(element) {
+                _getIterations(function(iterations) {
+                    _iterations = iterations || [];
+                    _createLayout(element);
+                });
+            };
+        }
+        
+    
+
+    </script>
+
+    <style type="text/css">
+    /*board styles*/
+        .typeFilterContainer {
+            float:right;
+            margin-right:30px;
+        }
+        
+        .board {
+            clear:both;
+        }
+        
+        /*settings dialog styles */
+        a img {
+            border:0;
+        }
+        
+        .buttonContainer span,
+        .buttonContainer a {
+            vertical-align:middle;
+        }
+        
+        .dijitTooltipContents{
+            font-size:9.5px;
+        }
+        
+        .labelTextBoxContainer .dijitTextBox {
+            width: 110px;
+        }
+        
+        .planEstimateTextBoxContainer .dijitTextBox {
+            width: 50px;
+        }
+        
+        .hide{
+            display:none;
+        }
+        
+        .tableHeaderRow {
+            font-weight: bold;
+            text-align: left;
+        }
+        
+        #addLinkCell img{
+            vertical-align:bottom;
+        }
+        
+        #columnNameTd{
+            width: 80px;
+        }
+        
+        #planEstimateTd{
+            width:55px;
+        }
+        
+        #settingsDialogDiv {
+            visibility: hidden;
+        }
+        
+        #settingsTable {
+            clear:right;
+            margin: 10px 25px 10px 25px;
+        }
+        
+        #units{
+            font-weight:normal;
+        }
+        
+        .noPlanEstimate {
+            font-style: italic;
+            color: gray;
+        }
+        
+        .hasPlanEstimate {
+            font-weight: bold;
+        }
+        
+        .isPreAssigned {
+            border: 2px solid black !important;
+        }
+        
+        .cardboard .columnHeader {
+            height: 35px;
+        }
+        
+        .cardboard .capacityDisplay {
+            font-size: 12px;
+            line-height: 20px;
+        }
+    
+
+    </style>
+
+    <script type="text/javascript">
+        function onLoad() {
+
+            var board, rallyDataSource;
+
+            rallyDataSource = new rally.sdk.data.RallyDataSource(
+              '__WORKSPACE_OID__',
+              '__PROJECT_OID__',
+              '__PROJECT_SCOPING_UP__',
+              '__PROJECT_SCOPING_DOWN__'
+            );
+
+            //rallyDataSource.setServer('test7cluster.rallydev.com');
+            //rallyDataSource.setServer('rally1.rallydev.com');
+            rallyDataSource.setServer('preview.rallydev.com');
+
+            board = new ForwardLookingIterationBoard(rallyDataSource, '__PROJECT_OIDS_IN_SCOPE__');
+            board.display(dojo.body());
+        }
+
+        rally.addOnLoad(onLoad);
+    </script>
+</head>
+<body>
+</body>
+</html>
