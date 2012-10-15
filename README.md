@@ -1,6 +1,6 @@
 # Forward Looking Iteration Board
 
-![screenshot](https://raw.github.com/RallyApps/ForwardLookingIterationBoard/master/flib.png)
+![screenshot](https://raw.github.com/RallyCommunity/ForwardLookingIterationBoard/master/flib.png)
 
 This is a dojo SDK app that gives teams an idea of what future iterations may look like. Using past velocities for the team, future iterations are filled with stories from the backlog. This is done in a read-only, completely hypothetical manner, no actual story scheduling takes place.
   
