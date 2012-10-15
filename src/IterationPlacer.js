@@ -30,7 +30,7 @@ flsp.IterationPlacer = function flsp_IterationPlacer(iterations, fallback) {
     function _sortItems(items) {
         items.sort(function(a, b) {
             var aRank = (a.Rank || 0), bRank = (b.Rank || 0);
-            return bRank - aRank;
+            return aRank - bRank;
         });
     }
 
